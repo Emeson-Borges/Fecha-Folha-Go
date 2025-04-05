@@ -15,6 +15,7 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -22,53 +23,20 @@ var (
 	password = "S551bp7fRs4qRCWx2M5y"
 	user     = "postgres"
 	port     = "5432"
-	login    = "admin"
-	senha    = "1234"
 )
 
 func main() {
 	os.Setenv("FYNE_RENDER", "software")
 
 	myApp := app.NewWithID("itarget.folha")
-	mostrarLogin(myApp)
+	abrirAppPrincipal(myApp)
 }
 
-func mostrarLogin(myApp fyne.App) {
-	loginWindow := myApp.NewWindow("Login - Fechamento de Folha")
-	loginWindow.Resize(fyne.NewSize(300, 200))
-
-	userEntry := widget.NewEntry()
-	userEntry.SetPlaceHolder("Usuário")
-
-	passEntry := widget.NewPasswordEntry()
-	passEntry.SetPlaceHolder("Senha")
-
-	loginBtn := widget.NewButton("Entrar", func() {
-		if userEntry.Text == login && passEntry.Text == senha {
-			loginWindow.Hide()
-			abrirAppPrincipal(myApp, loginWindow)
-		} else {
-			dialog.ShowError(fmt.Errorf("Login ou senha incorretos"), loginWindow)
-		}
-	})
-
-	form := container.NewVBox(
-		widget.NewLabelWithStyle("Acesso Restrito", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-		userEntry,
-		passEntry,
-		loginBtn,
-	)
-
-	loginWindow.SetContent(container.NewCenter(form))
-	// loginWindow.Show()
-	loginWindow.ShowAndRun()
-}
-
-func abrirAppPrincipal(myApp fyne.App, loginWindow fyne.Window) {
-	win := myApp.NewWindow("Fechamento de Folha")
+func abrirAppPrincipal(myApp fyne.App) {
+	win := myApp.NewWindow("Gerenciar Folha")
 	win.Resize(fyne.NewSize(500, 400))
 
-	title := widget.NewLabelWithStyle("Fechamento de Folha", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	title := widget.NewLabelWithStyle("Gerenciamento de Folha", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	title.Wrapping = fyne.TextWrapBreak
 
 	servidores := []string{
@@ -109,26 +77,15 @@ func abrirAppPrincipal(myApp fyne.App, loginWindow fyne.Window) {
 
 	relatorioLabel := widget.NewLabel("")
 
-	button := widget.NewButton("Fechar Folha", func() {
-		servidor := servidorSelect.Selected
-		banco := bancoSelect.Selected
-		ids := strings.TrimSpace(idEntry.Text)
-
-		if servidor == "" || banco == "" || ids == "" {
-			dialog.ShowError(fmt.Errorf("Preencha todos os campos."), win)
-			return
-		}
-
-		err := fecharFolha(servidor, banco, ids)
-		if err != nil {
-			dialog.ShowError(err, win)
-		} else {
-			gerarRelatorioCSV(servidor, banco, ids)
-			dialog.ShowInformation("Sucesso", "Folha(s) fechada(s) com sucesso!", win)
-			relatorioLabel.SetText("Relatório salvo com sucesso.")
-		}
+	abrirBtn := widget.NewButtonWithIcon("Abrir Folha", theme.ConfirmIcon(), func() {
+		executarAcaoFolha(win, servidorSelect.Selected, bancoSelect.Selected, idEntry.Text, false)
 	})
-	button.Importance = widget.HighImportance
+	abrirBtn.Importance = widget.HighImportance
+
+	fecharBtn := widget.NewButtonWithIcon("Fechar Folha", theme.CancelIcon(), func() {
+		executarAcaoFolha(win, servidorSelect.Selected, bancoSelect.Selected, idEntry.Text, true)
+	})
+	fecharBtn.Importance = widget.DangerImportance
 
 	form := container.NewVBox(
 		title,
@@ -140,7 +97,8 @@ func abrirAppPrincipal(myApp fyne.App, loginWindow fyne.Window) {
 		bancoSelect,
 		widget.NewLabel("ID da Folha:"),
 		idEntry,
-		button,
+		widget.NewSeparator(),
+		container.NewCenter(container.NewHBox(abrirBtn, fecharBtn)),
 		relatorioLabel,
 	)
 
@@ -148,7 +106,23 @@ func abrirAppPrincipal(myApp fyne.App, loginWindow fyne.Window) {
 	scroll.SetMinSize(fyne.NewSize(480, 360))
 
 	win.SetContent(container.NewCenter(scroll))
-	win.Show()
+	win.ShowAndRun()
+}
+
+func executarAcaoFolha(win fyne.Window, servidor, banco, ids string, fechar bool) {
+	ids = strings.TrimSpace(ids)
+	if servidor == "" || banco == "" || ids == "" {
+		dialog.ShowError(fmt.Errorf("Preencha todos os campos."), win)
+		return
+	}
+
+	err := executarSQLFolha(servidor, banco, ids, fechar)
+	if err != nil {
+		dialog.ShowError(err, win)
+	} else {
+		gerarRelatorioCSV(servidor, banco, ids)
+		dialog.ShowInformation("Sucesso", "Folha processada com sucesso!", win)
+	}
 }
 
 func listarBancos(servidor string) ([]string, error) {
@@ -177,7 +151,7 @@ func listarBancos(servidor string) ([]string, error) {
 	return bancos, nil
 }
 
-func fecharFolha(servidor, banco, ids string) error {
+func executarSQLFolha(servidor, banco, ids string, fechar bool) error {
 	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable", servidor, port, user, password, banco)
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
@@ -188,8 +162,13 @@ func fecharFolha(servidor, banco, ids string) error {
 	queries := []string{
 		fmt.Sprintf("UPDATE folhas SET status = 0 WHERE id IN (%s);", ids),
 		fmt.Sprintf("UPDATE orgaos_folhas SET status = 0 WHERE folha_id IN (%s);", ids),
-		fmt.Sprintf("UPDATE folhas SET status = 1 WHERE id IN (%s);", ids),
-		fmt.Sprintf("UPDATE orgaos_folhas SET status = 1 WHERE folha_id IN (%s);", ids),
+	}
+
+	if fechar {
+		queries = append(queries,
+			fmt.Sprintf("UPDATE folhas SET status = 1 WHERE id IN (%s);", ids),
+			fmt.Sprintf("UPDATE orgaos_folhas SET status = 1 WHERE folha_id IN (%s);", ids),
+		)
 	}
 
 	tx, err := db.Begin()
@@ -223,6 +202,6 @@ func gerarRelatorioCSV(servidor, banco, ids string) {
 	escritor := csv.NewWriter(file)
 	defer escritor.Flush()
 
-	escritor.Write([]string{"Data", "Servidor", "Banco", "IDs Fechados"})
+	escritor.Write([]string{"Data", "Servidor", "Banco", "IDs Processados"})
 	escritor.Write([]string{time.Now().Format("2006-01-02 15:04:05"), servidor, banco, ids})
 }
